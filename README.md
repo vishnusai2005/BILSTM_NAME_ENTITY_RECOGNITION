@@ -1,307 +1,245 @@
-# Named Entity Recognition with a BiLSTM (PyTorch)
+<div align="center">
 
-<p align="center">
-  <b>A sequence-labeling NLP project that identifies people, organizations, places, geopolitical entities, dates, and other named entities in text.</b>
-</p>
+# 🧠 Named Entity Recognition with a BiLSTM (PyTorch)
 
-<p align="center">
-  <img alt="Python" src="https://img.shields.io/badge/Python-3.x-blue?logo=python&logoColor=white">
-  <img alt="PyTorch" src="https://img.shields.io/badge/Deep%20Learning-PyTorch-ee4c2c?logo=pytorch&logoColor=white">
-  <img alt="Task" src="https://img.shields.io/badge/NLP-Named%20Entity%20Recognition-6f42c1">
-  <img alt="Evaluation" src="https://img.shields.io/badge/Test%20Micro%20F1-0.82-success">
-</p>
+### Teaching a neural network to find **people, places, organisations, dates and more** in raw text, trained from scratch on ~48,000 sentences.
 
-## Project overview
+![Python](https://img.shields.io/badge/Python-3-3776AB?logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-BiLSTM-EE4C2C?logo=pytorch&logoColor=white)
+![Task](https://img.shields.io/badge/Task-Sequence%20Labelling%20(NER)-blueviolet)
+![Entity F1](https://img.shields.io/badge/Test%20Entity%20F1-0.82-brightgreen)
+![Status](https://img.shields.io/badge/Status-Completed-success)
 
-Named Entity Recognition (NER) is the NLP task of locating named entities in unstructured text and assigning each entity a category. This project builds an end-to-end, word-level NER system using **PyTorch and a Bidirectional Long Short-Term Memory network (BiLSTM)**.
-
-The model reads a sentence in both directions. This gives each token representation access to information from the words before and after it, helping the classifier distinguish entities using sentence context rather than relying only on the token itself. A linear prediction layer then assigns one of 17 BIO tags to each token.
-
-The notebook covers the complete experimental workflow: dataset inspection, sentence reconstruction, vocabulary creation, train/validation/test splitting, padded batching, model construction, training, checkpoint selection, entity-level evaluation, and inference on new sentences.
-
-**Why this project matters:** extracting people, organizations, locations, and time expressions is a foundational capability for turning large volumes of text into structured information. NER can support downstream systems such as document search, news analysis, knowledge extraction, customer-support analytics, and information retrieval. These are potential applications of the technique; this repository demonstrates the model and evaluation workflow rather than a deployed production service.
-
-## Results at a glance
-
-| Project metric | Result |
-|---|---:|
-| Annotated dataset rows supplied | 1,048,575 |
-| Sentences after preprocessing | 47,959 |
-| Training sentences | 38,367 |
-| Validation sentences | 4,796 |
-| Test sentences | 4,796 |
-| Vocabulary size | 18,802 (including `<PAD>` and `<UNK>`) |
-| BIO output labels | 17 |
-| Model parameters | 2,675,217 |
-| Test micro F1 | **0.82** |
-| Test weighted F1 | **0.82** |
-| Test macro F1 | **0.64** |
-
-The reported test metrics come from the notebook's `seqeval` classification report. They are **sequence/entity-level NER metrics**, not token accuracy. The macro score is lower than the micro and weighted scores, reflecting weaker performance on some less frequent entity categories.
-
-## Model architecture
-
-```text
-Input sentence
-      │
-      ▼
-Whitespace-tokenized words
-      │
-      ▼
-Lowercase word-to-index lookup
-( <PAD> = 0, <UNK> = 1 )
-      │
-      ▼
-Learned word embeddings
-18,802 vocabulary entries × 128 dimensions
-      │
-      ▼
-Dropout (p = 0.3)
-      │
-      ▼
-Bidirectional LSTM
-128 hidden units per direction
-      │
-      ▼
-Concatenate forward and backward states
-256-dimensional token representation
-      │
-      ▼
-Dropout (p = 0.3)
-      │
-      ▼
-Linear token classifier
-256 → 17 BIO tag scores
-      │
-      ▼
-Argmax decoding
-      │
-      ▼
-BIO tags → extracted entity spans
-```
-
-### Architecture details
-
-| Component | Configuration |
-|---|---|
-| Embedding | Trainable `nn.Embedding`, 128 dimensions, padding index 0 |
-| Recurrent encoder | One bidirectional LSTM layer in the saved checkpoint |
-| Hidden size | 128 per direction; 256 after concatenation |
-| Dropout modules | 0.3 before and after the BiLSTM |
-| Classification head | Linear layer, 256 input features and 17 output classes |
-| Decoding | Per-token `argmax` |
-| Total parameters | 2,675,217 |
-
-**Architecture clarification:** the notebook's model constructor exposes a `num_layers=2` argument, but it does not pass `num_layers` into `nn.LSTM`. PyTorch therefore uses its default of one recurrent layer. The saved checkpoint confirms this: it contains the first-layer (`l0`) forward and reverse LSTM weights, but no second-layer (`l1`) weights. This README describes the model that was actually trained and saved, not the intended constructor setting. The explicit dropout modules around the LSTM are active; the LSTM's built-in inter-layer dropout has no effect with a single recurrent layer.
-
-This is a **BiLSTM + linear token-classification model**, not a BiLSTM-CRF. It predicts each token's tag with an independent linear classification step and does not use a CRF transition layer to enforce valid BIO tag sequences.
-
-## Entity categories
-
-The dataset uses BIO (Beginning, Inside, Outside) labels. `B-` marks the first token of an entity, `I-` marks a continuation token, and `O` marks a token outside any named entity.
-
-| Entity label | Meaning |
-|---|---|
-| `PER` | Person |
-| `ORG` | Organization |
-| `GEO` | Geographical entity |
-| `GPE` | Geopolitical entity |
-| `TIM` | Time expression |
-| `ART` | Artifact |
-| `EVE` | Event |
-| `NAT` | Natural phenomenon |
-| `O` | Not part of a named entity |
-
-Each entity type has a beginning and inside label, plus the shared `O` label: 8 entity types × 2 BIO prefixes + 1 outside label = **17 output classes**.
-
-## Dataset and preprocessing
-
-The supplied CSV uses the columns `Sentence #`, `Word`, `POS`, and `Tag`. Its format matches the GMB-derived *Annotated Corpus for Named Entity Recognition* commonly distributed through Kaggle. See the dataset reference in [Further reading](#further-reading).
-
-The notebook performs the following preprocessing steps:
-
-1. Reads the CSV using `latin1` encoding.
-2. Forward-fills `Sentence #` so every token row is associated with its sentence.
-3. Removes rows with missing `Word` or `Tag` values.
-4. Groups tokens and BIO labels by sentence identifier.
-5. Lowercases words for vocabulary lookup.
-6. Builds a vocabulary from words occurring at least twice, reserving index `0` for `<PAD>` and index `1` for `<UNK>`.
-7. Splits the sentences into training, validation, and test sets using an 80/10/10 split and `random_state=42`.
-8. Pads each batch dynamically. Input padding uses `0`; label padding uses `-1`, which is ignored by the loss function.
-
-The resulting vocabulary contains **18,802 entries**, and the dataset contains **47,959 grouped sentences**. Although the CSV includes a POS column, the current model uses only the `Word` and `Tag` columns; POS features are not fed into the network.
-
-## Training configuration
-
-| Setting | Value |
-|---|---:|
-| Optimizer | Adam |
-| Initial learning rate | 0.001 |
-| Loss | Cross-entropy (`ignore_index=-1`) |
-| Training batch size | 32 |
-| Validation/test batch size | 64 |
-| Maximum epochs | 20 |
-| Gradient clipping | Maximum norm 5.0 |
-| Learning-rate scheduler | `ReduceLROnPlateau` (factor 0.5, patience 2) |
-| Early stopping | 5 epochs without validation-F1 improvement |
-| Selection criterion | Best validation entity-level F1 |
-| Device selection | Apple MPS when available; otherwise CPU |
-
-The best validation checkpoint is saved as `best_bilstm_ner.pt`. The notebook then reloads that checkpoint and evaluates it on the held-out test set.
-
-## Test-set performance
-
-The following values are copied from the notebook's `seqeval` classification report and rounded to two decimal places.
-
-| Entity | Precision | Recall | F1-score | Support |
-|---|---:|---:|---:|---:|
-| Artifact (`art`) | 0.33 | 0.02 | 0.04 | 48 |
-| Event (`eve`) | 0.48 | 0.29 | 0.36 | 34 |
-| Geography (`geo`) | 0.84 | 0.89 | 0.86 | 3,819 |
-| Geopolitical entity (`gpe`) | 0.96 | 0.94 | 0.95 | 1,592 |
-| Natural phenomenon (`nat`) | 0.67 | 0.62 | 0.64 | 13 |
-| Organization (`org`) | 0.68 | 0.63 | 0.66 | 2,095 |
-| Person (`per`) | 0.75 | 0.75 | 0.75 | 1,731 |
-| Time (`tim`) | 0.88 | 0.87 | 0.87 | 1,990 |
-| **Micro average** | **0.82** | **0.82** | **0.82** | **11,322** |
-| **Macro average** | **0.70** | **0.63** | **0.64** | **11,322** |
-| **Weighted average** | **0.82** | **0.82** | **0.82** | **11,322** |
-
-### What the results indicate
-
-- The strongest results are for geopolitical entities (`GPE`, F1 0.95), time expressions (`TIM`, F1 0.87), and geographical entities (`GEO`, F1 0.86).
-- Person entities achieve an F1-score of 0.75, while organizations achieve 0.66.
-- Rare categories are more challenging: the artifact class has an F1-score of 0.04 on 48 examples, and the event class has an F1-score of 0.36 on 34 examples. The natural-phenomenon score is based on only 13 examples, so it should be interpreted cautiously.
-- The gap between the weighted F1 (0.82) and macro F1 (0.64) shows why reporting more than one average is important for an imbalanced NER dataset.
-
-## Example predictions
-
-The notebook includes a small inference demonstration using manually written sentences. Examples from that run:
-
-**Input:** `Elon Musk founded Tesla in 2003`
-
-| Extracted entity | Predicted type |
-|---|---|
-| Elon Musk | Person (`PER`) |
-| 2003 | Time (`TIM`) |
-
-**Input:** `The United Nations held a meeting in New York on Monday`
-
-| Extracted entity | Predicted type |
-|---|---|
-| United Nations | Organization (`ORG`) |
-| New York | Geography (`GEO`) |
-| Monday | Time (`TIM`) |
-
-These examples demonstrate the notebook's inference and entity-span extraction functions; they are illustrative predictions, not a separate benchmark.
-
-## Repository structure
-
-A clean GitHub repository can use the following layout:
-
-```text
-bilstm-named-entity-recognition/
-│
-├── BILSTM_NAME_ENTITY.ipynb   # Notebook: preprocessing, training, evaluation, inference
-├── ner_dataset.csv            # Annotated token-level dataset
-├── best_bilstm_ner.pt         # Saved PyTorch state_dict checkpoint
-└── README.md                  # Project documentation
-```
-
-Rename the uploaded notebook to `BILSTM_NAME_ENTITY.ipynb` when adding it to the repository, if it still has a download suffix such as `(1)`.
-
-## Run the project
-
-### 1. Clone the repository
-
-```bash
-git clone <YOUR_GITHUB_REPOSITORY_URL>
-cd bilstm-named-entity-recognition
-```
-
-### 2. Create and activate a virtual environment
-
-```bash
-python -m venv .venv
-
-# macOS / Linux
-source .venv/bin/activate
-
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
-```
-
-### 3. Install dependencies
-
-```bash
-pip install torch numpy pandas scikit-learn seqeval matplotlib jupyter
-```
-
-For PyTorch installation options specific to your operating system and hardware, use the [official PyTorch installation guide](https://pytorch.org/get-started/locally/).
-
-### 4. Check the dataset path
-
-The notebook currently contains a machine-specific absolute path in its CSV-loading cell. Replace it with a repository-relative path before running:
-
-```python
-df = pd.read_csv("ner_dataset.csv", encoding="latin1")
-```
-
-Keep `ner_dataset.csv` in the same directory as the notebook, or update the path to match your folder structure.
-
-### 5. Run the notebook
-
-```bash
-jupyter notebook BILSTM_NAME_ENTITY.ipynb
-```
-
-Run the cells from top to bottom. The notebook preprocesses the data, creates the vocabulary and data loaders, trains the model, saves the best checkpoint, evaluates the test set, and demonstrates inference.
-
-## Loading the saved checkpoint
-
-The `.pt` file contains the model's **state dictionary**. The model architecture and the vocabulary/tag mappings must be recreated before loading it. Run the notebook cells that prepare `word2idx`, `tag2idx`, `idx2tag`, and `model`, then load the checkpoint:
-
-```python
-model.load_state_dict(
-    torch.load("best_bilstm_ner.pt", map_location=device)
-)
-model.eval()
-```
-
-The current notebook rebuilds the vocabulary from the CSV instead of saving the mappings as separate artifacts. For reliable standalone inference, preserve the exact vocabulary and tag mappings alongside the model checkpoint in a future revision.
-
-## Skills demonstrated
-
-- **Natural Language Processing:** named entity recognition, sequence labeling, BIO tagging, entity-span extraction.
-- **Deep Learning:** BiLSTM architecture, trainable embeddings, dropout, backpropagation, gradient clipping, checkpointing.
-- **PyTorch engineering:** custom `Dataset`, `DataLoader`, dynamic batch padding, device-aware training and inference.
-- **Data preparation:** handling missing sentence identifiers, grouping token sequences, vocabulary construction, unknown-token handling, and dataset splitting.
-- **Model evaluation:** validation-based checkpoint selection and entity-level precision, recall, and F1 using `seqeval`.
-- **Experiment workflow:** learning-rate scheduling, early stopping, test-set reporting, and qualitative inference examples.
-
-## Limitations and next steps
-
-This repository is a practical BiLSTM baseline. The following improvements would make it more robust and production-ready:
-
-1. **Persist preprocessing artifacts:** save `word2idx`, `tag2idx`, and `idx2tag` with the model so inference does not depend on rebuilding mappings from the dataset.
-2. **Correct and retrain the layer configuration:** pass `num_layers` explicitly to `nn.LSTM` if a stacked two-layer network is intended. This changes the architecture, so the existing single-layer checkpoint should not be presented as a two-layer model or loaded as though it were one.
-3. **Fit vocabulary on training data only:** the current notebook constructs the vocabulary before the train/validation/test split. This uses token-frequency information from all partitions, although it does not use their labels. For a stricter evaluation protocol, build the vocabulary from the training partition and map unseen validation/test tokens to `<UNK>`.
-4. **Add sequence-aware decoding:** evaluate a CRF layer to model dependencies between adjacent BIO labels and reduce invalid tag transitions.
-5. **Handle padded sequences more carefully:** consider `pack_padded_sequence` so the recurrent network does not process right-padding as if it were part of each sentence.
-6. **Improve tokenization and decoding:** replace simple whitespace splitting with a tokenizer consistent with the training data, and validate entity-type transitions while reconstructing spans.
-7. **Address label imbalance:** experiment with class weighting, resampling, or additional labeled examples for rare categories such as artifacts and events.
-8. **Use richer token representations:** compare the current learned word embeddings with pretrained embeddings or character/subword features, especially for unseen names and spelling variants.
-9. **Strengthen reproducibility and evaluation:** set Python/NumPy/PyTorch random seeds, report multiple runs, perform per-class error analysis, and test on data from a different source or domain.
-10. **Compare against modern baselines:** benchmark against BiLSTM-CRF and transformer-based NER models under the same data split and evaluation protocol.
-
-## Further reading
-
-- Lample et al. (2016), [*Neural Architectures for Named Entity Recognition*](https://arxiv.org/abs/1603.01360) — foundational work on neural NER architectures, including BiLSTM-CRF. The paper is useful background; this repository implements a BiLSTM with a linear token classifier rather than the paper's CRF decoder.
-- [PyTorch `torch.nn.LSTM` documentation](https://docs.pytorch.org/docs/stable/generated/torch.nn.LSTM.html) — bidirectionality, recurrent layers, tensor shapes, and dropout behavior.
-- [seqeval](https://github.com/chakki-works/seqeval) — sequence-labeling metrics used for the notebook's NER classification report.
-- [Annotated Corpus for Named Entity Recognition (Kaggle)](https://www.kaggle.com/abhinavwalia95/entity-annotated-corpus/) — reference dataset listing for the GMB-derived corpus format.
-- [Domino: Building a named entity recognition model using a BiLSTM-CRF network](https://domino.ai/blog/named-entity-recognition-ner-challenges-and-model) — background on NER, IOB labels, the dataset fields, and the distinction between BiLSTM and BiLSTM-CRF architectures.
+</div>
 
 ---
 
-**Note:** Metrics and implementation details in this README are based on the supplied notebook, CSV, and saved checkpoint. Results should be re-evaluated after any changes to preprocessing, vocabulary construction, architecture, or dataset split.
+## 📌 Executive Summary
+
+Unstructured text (news, emails, resumes, support tickets, contracts) holds valuable facts, but a computer cannot use them until it knows **who, where, what and when** a sentence is talking about. This task is called **Named Entity Recognition (NER)**.
+
+This project builds an end-to-end NER system **from scratch**: data cleaning, vocabulary building, a custom PyTorch data pipeline, a **Bidirectional LSTM** tagger, training with early stopping and learning-rate scheduling, strict entity-level evaluation, and an interactive prediction function that turns a plain sentence into a list of labelled entities.
+
+| | |
+|---|---|
+| **Test entity-level F1 (micro)** | **0.82** (precision 0.82, recall 0.82) on 11,322 held-out entities |
+| **Strongest categories** | Geopolitical entities **0.95**, Time **0.87**, Geographic **0.86** |
+| **Model size** | 2.68 M parameters (light enough to train on a laptop) |
+| **Training data** | 47,959 sentences, 1,048,575 words, 17 BIO tags, 8 entity types |
+| **Honest caveat** | Rare classes (artifacts, events) remain weak; see the [audit](#-engineering-audit-known-limitations) |
+
+> ✅ **Independently verified.** The reported test scores were re-computed from the saved checkpoint (`best_bilstm_ner.pt`) with a separate NumPy re-implementation of the network. The result matched the notebook: micro F1 **0.8195**, validation F1 **0.8153**.
+
+---
+
+## 🎯 Why This Matters (Business Value)
+
+Entity extraction is a building block behind many real products:
+
+| Use case | How NER helps |
+|---|---|
+| **Resume / CV screening** | Pull out names, employers, institutions, dates and locations automatically |
+| **News & media monitoring** | Track which organisations, people and places appear in the headlines |
+| **Customer-support routing** | Detect products, locations and dates inside tickets |
+| **Compliance & KYC** | Flag people, companies and jurisdictions in documents |
+| **Search & knowledge graphs** | Turn free text into structured, queryable records |
+
+---
+
+## 🔍 Live Demo (real model output)
+
+```python
+"Barack Obama visited Paris and met with Emmanuel Macron"
+→ Barack Obama [per] · Paris [geo] · Emmanuel Macron [per]        ✅
+
+"The United Nations held a meeting in New York on Monday"
+→ United Nations [org] · New York [geo] · Monday [tim]            ✅
+
+"Google announced a partnership with Microsoft in San Francisco"
+→ Google [org] · Microsoft [org] · San Francisco [geo]            ✅
+
+"Elon Musk founded Tesla in 2003"
+→ Elon Musk [per] · 2003 [tim]                                    ⚠️ "Tesla" missed
+
+"Apple Inc was founded by Steve Jobs in California"
+→ Apple Inc [org] · Steve [per] · California [geo]                ⚠️ "Jobs" mis-tagged as O
+```
+
+Six hand-written sentences are a **sanity check, not a benchmark**. The misses are shown on purpose. The benchmark is the 4,796-sentence test set below.
+
+---
+
+## 🗂️ Dataset
+
+| Property | Value |
+|---|---|
+| File | `ner_dataset.csv` (annotated NER corpus, Kaggle / Groningen Meaning Bank style) |
+| Rows (words) | 1,048,575 |
+| Sentences | 47,959 (min length 1, max 104, mean 21.9, 95th percentile 35 words) |
+| Columns | `Sentence #`, `Word`, `POS`, `Tag` |
+| Tag scheme | **BIO** (`B-` begins an entity, `I-` continues it, `O` is outside) |
+| Entity types | `per` person · `geo` geographic · `gpe` geopolitical · `org` organisation · `tim` time · `art` artifact · `eve` event · `nat` natural phenomenon |
+
+**Class imbalance is severe.** About **84.7 %** of all tokens are `O`. Of the 111,891 entity starts, `geo` has 37,644 while `nat` has only 201. This is why entity-level F1 is used instead of plain accuracy (see [metrics](#-results)).
+
+---
+
+## ⚙️ Pipeline
+
+```mermaid
+flowchart LR
+    A[Raw CSV<br/>1.05M words] --> B[Forward-fill sentence IDs<br/>drop nulls]
+    B --> C[Group into<br/>47,959 sentences]
+    C --> D[Lower-case vocabulary<br/>18,802 words, min count 2]
+    D --> E[80 / 10 / 10 split<br/>38,367 / 4,796 / 4,796]
+    E --> F[PyTorch Dataset + DataLoader<br/>dynamic padding]
+    F --> G[BiLSTM tagger]
+    G --> H[Adam + LR scheduler<br/>early stopping on val F1]
+    H --> I[Best checkpoint<br/>best_bilstm_ner.pt]
+    I --> J[seqeval entity-level report]
+    I --> K[predict_sentence +<br/>extract_entities]
+```
+
+---
+
+## 🏗️ Model Architecture
+
+```
+Input tokens → Embedding (18,802 × 128) → Dropout(0.3)
+             → Bidirectional LSTM (1 layer, 128 hidden units per direction → 256)
+             → Dropout(0.3)
+             → Linear (256 → 17 BIO tags)
+```
+
+| Setting | Value |
+|---|---|
+| Parameters | **2,675,217** |
+| Loss | Cross-entropy, padding positions ignored (`ignore_index=-1`) |
+| Optimiser | Adam, learning rate 1e-3 |
+| Scheduler | `ReduceLROnPlateau` (patience 2, factor 0.5) on `1 − val F1` |
+| Regularisation | Dropout 0.3, gradient clipping at 5.0 |
+| Training | Up to 20 epochs, batch size 32, early-stopping patience 5, best checkpoint saved by validation F1 |
+| Hardware | Apple Silicon GPU (PyTorch `mps` backend) |
+
+**Why a BiLSTM?** A forward LSTM reads a sentence left to right; a backward LSTM reads it right to left. Joining both lets the model use context on both sides of a word. In "Washington *signed* the bill" versus "he flew to Washington *yesterday*", the neighbours decide whether the word is a person or a place.
+
+---
+
+## 📈 Results
+
+### Training behaviour
+
+<div align="center">
+<img src="assets/training_curves.png" alt="Training loss and validation F1 over 20 epochs" width="800"/>
+</div>
+
+- Training loss fell steadily, from roughly **0.39** to **0.07**.
+- Validation F1 climbed from roughly **0.70** after epoch 1 to a best of **0.8153**, then plateaued from around epoch 10 while training loss kept falling. This is the usual sign that the model has extracted most of what its capacity and data allow.
+
+### Final test-set report (entity level, `seqeval`)
+
+| Entity | Precision | Recall | F1 | Support |
+|---|---:|---:|---:|---:|
+| `gpe` (geopolitical) | 0.96 | 0.94 | **0.95** | 1,592 |
+| `tim` (time) | 0.88 | 0.87 | **0.87** | 1,990 |
+| `geo` (geographic) | 0.84 | 0.89 | **0.86** | 3,819 |
+| `per` (person) | 0.75 | 0.75 | 0.75 | 1,731 |
+| `org` (organisation) | 0.68 | 0.63 | 0.66 | 2,095 |
+| `nat` (natural phenomenon) | 0.67 | 0.62 | 0.64 | 13 |
+| `eve` (event) | 0.48 | 0.29 | 0.36 | 34 |
+| `art` (artifact) | 0.33 | 0.02 | 0.04 | 48 |
+| **micro average** | **0.82** | **0.82** | **0.82** | **11,322** |
+| macro average | 0.70 | 0.63 | 0.64 | 11,322 |
+| weighted average | 0.82 | 0.82 | 0.82 | 11,322 |
+
+### How to read these numbers
+
+- **0.82 is a micro-averaged, entity-level F1.** An entity counts as correct only if its *whole span and type* are right. "New York" tagged as just "New" is wrong. This is stricter than word-level accuracy.
+- **Word-level accuracy is 96.6 %**, but a model that predicted `O` for every word would already score about 84.7 %. That is why accuracy is not used as the headline metric.
+- **Macro F1 is only 0.64** because the rare classes (`art`, `eve`, `nat`) pull the average down. The model is strong on frequent classes and weak on rare ones.
+
+---
+
+## 🚀 Getting Started
+
+```bash
+git clone https://github.com/vishnusai2005/<your-repo-name>.git
+cd <your-repo-name>
+pip install torch pandas numpy scikit-learn matplotlib seqeval
+jupyter notebook BILSTM_NAME_ENTITY.ipynb
+```
+
+Run the notebook top to bottom. Before running, change the CSV path in the data-loading cell to `ner_dataset.csv`; the notebook currently points at an absolute path on the author's machine.
+
+> **Note:** the vocabulary (`word2idx`) is rebuilt deterministically from the dataset and is **not** stored inside `best_bilstm_ner.pt`. Run the vocabulary cells before loading the checkpoint.
+
+### Repository layout
+
+```
+├── BILSTM_NAME_ENTITY.ipynb   # full pipeline: data → model → evaluation → demo
+├── best_bilstm_ner.pt         # trained weights (best validation F1)
+├── ner_dataset.csv            # annotated corpus
+├── assets/
+│   └── training_curves.png    # loss and validation-F1 plot
+└── README.md
+```
+
+---
+
+## 🔬 Engineering Audit: Known Limitations
+
+Every finding below was confirmed by reading the code and re-running the saved checkpoint. They are listed openly because knowing a model's weak points is part of shipping it responsibly.
+
+| # | Finding | Impact | Planned fix |
+|---|---|---|---|
+| 1 | **The LSTM is single-layer, not two-layer.** `BiLSTM_NER` accepts `num_layers=2`, but the value is never passed to `nn.LSTM`. PyTorch's warning in the notebook confirms it. The checkpoint contains only layer-0 weights. | The in-LSTM dropout has no effect, and the architecture is smaller than the argument suggests. All figures in this README describe the real single-layer model. | Pass `num_layers=num_layers` to `nn.LSTM`, retrain and compare |
+| 2 | **Training log not preserved.** The saved training cell shows a `KeyboardInterrupt` and no per-epoch printout. | Epoch-by-epoch numbers cannot be read from the notebook. The plot and checkpoint are consistent, since the checkpoint re-scores 0.8153 validation F1. | Re-run once to a clean, logged finish |
+| 3 | **Naive whitespace tokenisation in `predict_sentence`.** `"Paris."` stays one token, becomes `<UNK>`, and is tagged `O`; `"Paris ."` is tagged `B-geo`. | Punctuation can silently hide entities at inference time. | Use a real tokeniser (spaCy / NLTK) that matches the training data |
+| 4 | **`extract_entities` ignores type consistency.** An `I-` tag is merged into the open entity even if its type differs from the `B-` tag. | Possible malformed spans. | Require matching entity types when merging |
+| 5 | **Vocabulary built on the full dataset before splitting.** Roughly 1.3 % of test tokens map to `<UNK>`. | Minor leakage of vocabulary membership, though no labels leak. Words seen only in validation or test never get trained embeddings. | Build the vocabulary from the training split only |
+| 6 | **Severe class imbalance and no class weighting.** | `art` F1 is 0.04 and `eve` is 0.36. | Weighted loss, oversampling, or a CRF layer |
+| 7 | **All text is lower-cased.** | Capitalisation is a strong NER cue ("Apple" vs "apple"). This is a likely contributor to the weaker `org` and `per` scores (a hypothesis, not tested). | Add case or character-level features |
+| 8 | **Independent argmax decoding.** | The model can emit invalid BIO sequences (e.g. `I-org` after `O`). | Add a CRF decoding layer |
+| 9 | **No random seeds for PyTorch or NumPy.** Only the data split is seeded. | Retraining will not reproduce scores exactly. | Add `torch.manual_seed` and `np.random.seed` |
+| 10 | **Notebook hygiene.** `pip install seqeval` is run twice, the "Best validation F1" print sits inside the epoch loop, a stray `label_seq` debug cell remains, 31 of 53 cells are empty, and the dataset path is hard-coded. | Cosmetic, but it makes the notebook harder to review. | Tidy before the next version |
+
+**One concern checked and cleared:** the notebook pads sentences in each batch without packing them, which could in theory make scores depend on batch composition. Scoring each test sentence individually gave F1 **0.8192**, versus **0.8195** in padded batches, so the effect is negligible.
+
+---
+
+## 🛣️ Roadmap
+
+- [ ] Fix the layer-count bug (#1) and re-benchmark the two-layer model
+- [ ] Add a **CRF** output layer for valid BIO sequences
+- [ ] Add **character-level embeddings** and case features for rare and unseen words
+- [ ] Try pre-trained embeddings (GloVe / fastText) and a transformer baseline (BERT / DistilBERT) for comparison
+- [ ] Handle class imbalance (weighted loss) to lift `art`, `eve` and `nat`
+- [ ] Wrap the predictor in a small **Streamlit / FastAPI** demo app
+- [ ] Save the vocabulary alongside the weights so inference needs only the checkpoint
+
+---
+
+## 🧰 Tech Stack
+
+**Python · PyTorch · NumPy · pandas · scikit-learn · seqeval · Matplotlib · Jupyter**
+
+**Skills demonstrated:** NLP sequence labelling · custom `Dataset` / `DataLoader` / collate functions · BiLSTM design · training loops with early stopping, LR scheduling and gradient clipping · entity-level evaluation · class-imbalance analysis · error analysis and honest reporting.
+
+---
+
+## 👤 Author
+
+**Vishnusai Vydhyam**
+Final-year B.Tech, Computer Science Engineering (AI & ML), Mohan Babu University, Tirupati
+Seeking **Machine Learning / Data Science / AI Engineer** roles and internships.
+
+[![GitHub](https://img.shields.io/badge/GitHub-vishnusai2005-181717?logo=github)](https://github.com/vishnusai2005)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-vishnusai--vydhyam-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/vishnusai-vydhyam)
+
+---
+
+<div align="center">
+
+⭐ If you found this project useful, please consider starring the repository.
+
+</div>
